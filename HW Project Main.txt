@@ -1,0 +1,144 @@
+#define F_CPU 1000000UL
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <avr/interrupt.h>
+#include <stdlib.h>
+
+//LCD
+#define LCD_DDR DDRC
+#define LCD_PORT PORTC
+#define LCD_E PIND7
+#define LCD_RS PIND6
+
+//Selonoid
+#define SELONOID_PORT PORTD
+#define SELONOID_PIN PIND2
+
+//AIRPUMP
+#define AIRPUMP_PORT PORTD
+#define AIRPUMP_PIN PIND3
+
+#include "LCD.h"
+#include "pressure.h"
+ 
+
+int sys, dia, heart;
+
+int main();
+
+void Solenoid_on(){
+	SELONOID_PORT |= (1<<SELONOID_PIN);
+}
+
+void Solenoid_off(){
+	SELONOID_PORT &= ~(1<<SELONOID_PIN);
+}
+
+void airpump_on(){
+	AIRPUMP_PORT |= (1<<AIRPUMP_PIN);
+}
+
+void airpump_off(){
+	AIRPUMP_PORT &= ~(1<<AIRPUMP_PIN);
+}
+
+double pressure_get(){
+	P_init(128);
+	P_set_scale(1.f);//242300.88
+	P_set_gain(128);
+	P_tare(10);
+	return (P_get_offset()-8422643.00)/1000;
+}
+
+void pressure(){
+	TCCR0 |= 1 << CS00 | 1<<CS02;	// counter0 1024 prescaler
+	TCCR1B |= 1<<CS10 | 1<<CS12; //counter1 with 1024 prescaler
+	
+	Solenoid_on();
+	airpump_on();
+	
+	lcd_goto(3,1);
+	lcd_prints("Air Pumping..");
+	TCNT1 = 0;
+	
+	int hand_cuff_check = 0;
+	
+	while(TCNT1 >= 3000){
+		_delay_ms(100);
+		P_init(128);
+		P_set_scale(1.f);//242300.88
+		P_set_gain(128);
+		P_tare(10);
+		return (P_get_offset()-8422643.00)/1000;
+		if(pressure_get() > 120.0){
+			hand_cuff_check = 1;
+		}
+	}
+	
+	if (hand_cuff_check == 0){
+		lcd_clear();
+		lcd_prints("Measuring Pressure Failed..");
+		airpump_off();
+		Solenoid_off();
+		dia = 0;
+		sys = 0;
+		heart = 0;		
+		_delay_ms(2000);
+	} else {
+		lcd_clear();
+		lcd_prints("Measuring Blood Pressure..");
+		while(pressure_get() < 190.00);
+		airpump_off();
+		
+		int count = 0;
+		int timer_count = 0;
+		double prev = 9999.9;
+		double now;
+		
+		TCNT1 = 0;
+		
+		while(timer_count >= 9759){  //loop  for 10s
+			if(TCNT1 > 600){
+				timer_count += TCNT1;
+				TCNT1 = 0;
+			}
+			now = pressure_get();
+			if((prev < now) && TCNT1 >= 325){
+				if(count == 0){
+					sys = (int)now;
+				}
+				prev = now;
+				count++;
+				timer_count += TCNT1;
+				TCNT1 = 0;
+				dia = (int)now;
+			}
+			prev = now;
+			
+		}		
+		Solenoid_off();
+		heart = count * 6;
+	}
+}
+
+int main(){	
+	lcd_init();		//Initialize LCD Display
+	
+	DDRD |= (1<<SELONOID_PIN) | (1<<AIRPUMP_PIN);	//Solenoid valve & Air Pump pins as output
+	
+	while(1){
+		int b=0, p=0;
+		lcd_clear();
+		lcd_prints("Measuring Blood Pressure..");
+		pressure();
+		lcd_prints("Pres: ");
+		lcd_printi(sys, 3);
+		lcd_printc('/');
+		lcd_printi(dia, 2);
+		lcd_prints("mmHg");
+		lcd_goto(2,1);
+		lcd_prints("Pulse: ");
+		lcd_printi(pulse, 3);
+	}
+}
